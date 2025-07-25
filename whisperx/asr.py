@@ -197,6 +197,7 @@ class FasterWhisperPipeline(Pipeline):
         print_progress=False,
         combined_progress=False,
         verbose=False,
+        word_timestamps=False
     ) -> TranscriptionResult:
         if isinstance(audio, str):
             audio = load_audio(audio)
@@ -255,6 +256,7 @@ class FasterWhisperPipeline(Pipeline):
         segments: List[SingleSegment] = []
         batch_size = batch_size or self._batch_size
         total_segments = len(vad_segments)
+        self.options.word_timestamps = word_timestamps        
         for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
             if print_progress:
                 base_progress = ((idx + 1) / total_segments) * 100
