@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from faster_whisper.tokenizer import Tokenizer
 from faster_whisper.transcribe import TranscriptionOptions, get_ctranslate2_storage
+from faster_whisper.utils import get_end
 from transformers import Pipeline
 from transformers.pipelines.pt_utils import PipelineIterator
 
@@ -70,21 +71,23 @@ class WhisperModel(faster_whisper.WhisperModel):
                 suppress_blank=options.suppress_blank,
                 suppress_tokens=options.suppress_tokens,
             )
-        
         print(result)
-
         tokens_batch = [x.sequences_ids[0] for x in result]
 
-        def decode_batch(tokens: List[List[int]]) -> str:
+        def decode_batch(tokens: List[List[int]]) -> list[str]:
             res = []
             for tk in tokens:
                 res.append([token for token in tk if token < tokenizer.eot])
             # text_tokens = [token for token in tokens if token < self.eot]
             return tokenizer.tokenizer.decode_batch(res)
 
-        text = decode_batch(tokens_batch)
-
-        return text
+        texts = decode_batch(tokens_batch)
+        
+        if options.word_timestamps:
+            print(features.shape, encoder_output.shape)
+            num_frames = features.shape[-1] - 1
+            return texts, tokens_batch, encoder_output, num_frames
+        return texts, tokens_batch, None, None
 
     def encode(self, features: np.ndarray) -> ctranslate2.StorageView:
         # When the model is running on multiple GPUs, the encoder output should be moved
@@ -161,8 +164,8 @@ class FasterWhisperPipeline(Pipeline):
         return {'inputs': features}
 
     def _forward(self, model_inputs):
-        outputs = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
-        return {'text': outputs}
+        outputs, token_ids, encoder_output, num_frames = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
+        return {'text': outputs, 'token_ids': token_ids, 'encoder_output': encoder_output, 'num_frames': num_frames}
 
     def postprocess(self, model_outputs):
         return model_outputs
@@ -260,10 +263,30 @@ class FasterWhisperPipeline(Pipeline):
         total_segments = len(vad_segments)
         self.options.word_timestamps = word_timestamps        
         for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
+            print(vad_segments[idx:idx+batch_size])
             if print_progress:
                 base_progress = ((idx + 1) / total_segments) * 100
                 percent_complete = base_progress / 2 if combined_progress else base_progress
                 print(f"Progress: {percent_complete:.2f}%...")
+
+            if self.options.word_timestamps:
+                segments_as_dict = {
+                    "start": vad_segments[idx]['start'],
+                    "end": vad_segments[idx]['end'],
+                    "tokens": out['token_ids'][idx],
+                    "seek": 0.0
+                }
+                        
+                self.model.add_word_timestamps(
+                    segments_as_dict, # need start, end, tokens, seek
+                    self.tokenizer,
+                    out['encoder_output'],
+                    out['num_frames'],
+                    self.options.prepend_punctuations,
+                    self.options.append_punctuations,
+                    last_speech_timestamp=0.0,
+                )
+            
             text = out['text']
             if batch_size in [0, 1, None]:
                 text = text[0]
