@@ -271,7 +271,7 @@ class FasterWhisperPipeline(Pipeline):
                 print(f"Progress: {percent_complete:.2f}%...")
 
             print(self.options.word_timestamps)
-            if self.options.word_timestamps:
+            if False and self.options.word_timestamps:
                 segments_as_dict = {
                     "start": vad_segments[idx]['start'],
                     "end": vad_segments[idx]['end'],
