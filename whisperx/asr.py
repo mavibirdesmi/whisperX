@@ -166,8 +166,15 @@ class FasterWhisperPipeline(Pipeline):
     def _forward(self, model_inputs):
         out = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
         print(out)
+        encoder_output : ctranslate2.StorageView
         outputs, token_ids, encoder_output, num_frames = out
-        return {'text': outputs, 'token_ids': token_ids, 'encoder_output': encoder_output, 'num_frames': num_frames}
+        print(encoder_output)
+        return {
+            'text': outputs,
+            'token_ids': token_ids,
+            'encoder_output': encoder_output,
+            'num_frames': num_frames
+        }
 
     def postprocess(self, model_outputs):
         return model_outputs
