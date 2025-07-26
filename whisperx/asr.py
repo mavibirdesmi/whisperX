@@ -261,7 +261,8 @@ class FasterWhisperPipeline(Pipeline):
         segments: List[SingleSegment] = []
         batch_size = batch_size or self._batch_size
         total_segments = len(vad_segments)
-        self.options.word_timestamps = word_timestamps        
+        self.options.word_timestamps = word_timestamps
+        print(vad_segments, type(vad_segments))
         for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
             print(vad_segments[idx:idx+batch_size])
             if print_progress:
