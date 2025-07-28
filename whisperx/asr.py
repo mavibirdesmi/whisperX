@@ -165,16 +165,31 @@ class FasterWhisperPipeline(Pipeline):
 
     def _forward(self, model_inputs):
         out = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
-        print(out)
         encoder_output : ctranslate2.StorageView
         outputs, token_ids, encoder_output, num_frames = out
-        print(encoder_output)
         return {
             'text': outputs,
             'token_ids': token_ids,
             'encoder_output': encoder_output,
             'num_frames': num_frames
         }
+
+    def forward(self, model_inputs, **forward_params):
+        with self.device_placement():
+            if self.framework == "tf":
+                model_inputs["training"] = False
+                model_outputs = self._forward(model_inputs, **forward_params)
+            elif self.framework == "pt":
+                inference_context = self.get_inference_context()
+                with inference_context():
+                    model_inputs = self._ensure_tensor_on_device(model_inputs, device=self.device)
+                    model_outputs = self._forward(model_inputs, **forward_params)
+                    print(model_outputs)
+                    model_outputs = self._ensure_tensor_on_device(model_outputs, device=torch.device("cpu"))
+                    print(model_outputs)
+            else:
+                raise ValueError(f"Framework {self.framework} is not supported")
+        return model_outputs
 
     def postprocess(self, model_outputs):
         return model_outputs
