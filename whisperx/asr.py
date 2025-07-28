@@ -50,7 +50,7 @@ class MyPipelineIterator(PipelineIterator):
                 if element is None:
                     # This can happen for optional data that get passed around
                     loader_batched[k] = None
-                elif isinstance(element, ctranslate2.StorageView):
+                elif isinstance(element, (ctranslate2.StorageView, int)):
                     loader_batched[k] = element
                 elif isinstance(element[self._loader_batch_index], torch.Tensor):
                     # Take correct batch data, but make it looked like batch_size=1
