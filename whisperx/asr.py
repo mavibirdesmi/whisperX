@@ -334,13 +334,13 @@ class FasterWhisperPipeline(Pipeline):
 
             print(self.options.word_timestamps)
             if self.options.word_timestamps:
-                print(out)
                 segments_as_dict = {
                     "start": vad_segments[idx]['start'],
                     "end": vad_segments[idx]['end'],
                     "tokens": out['token_ids'],
                     "seek": 0.0
                 }
+                print("in_transcribe_word_timestamps", segments_as_dict)
                         
                 self.model.add_word_timestamps(
                     segments_as_dict, # need start, end, tokens, seek
