@@ -23,49 +23,50 @@ class MyPipelineIterator(PipelineIterator):
         """
         Return item located at `loader_batch_index` within the current `loader_batch_data`.
         """
-        print("in_loader_batch_item", self._loader_batch_data, self._loader_batch_index, type(self._loader_batch_data))
-        if isinstance(self._loader_batch_data, ctranslate2.StorageView):
-            result = self._loader_batch_data
-            self._loader_batch_index += 1
-            return result
+        if isinstance(self._loader_batch_data, torch.Tensor):
+            # Batch data is simple tensor, just fetch the slice
+            result = self._loader_batch_data[self._loader_batch_index].unsqueeze(0)
         else:
-            return super().loader_batch_item()
-    
-    def __next__(self):
-        if self._loader_batch_index is not None and self._loader_batch_index < self.loader_batch_size:
-            # We are currently unrolling a batch so we just need to return
-            # the current item within a batch
-            return self.loader_batch_item()
+            # Batch data is assumed to be BaseModelOutput (or dict)
+            loader_batched = {}
+            for k, element in self._loader_batch_data.items():
+                if isinstance(element, ModelOutput):
+                    # Convert ModelOutput to tuple first
+                    element = element.to_tuple()
+                    if isinstance(element[0], torch.Tensor):
+                        loader_batched[k] = tuple(el[self._loader_batch_index].unsqueeze(0) for el in element)
+                    elif isinstance(element[0], np.ndarray):
+                        loader_batched[k] = tuple(np.expand_dims(el[self._loader_batch_index], 0) for el in element)
+                    continue
+                if k in {"hidden_states", "past_key_values", "attentions"} and isinstance(element, tuple):
+                    # Those are stored as lists of tensors so need specific unbatching.
+                    if isinstance(element[0], torch.Tensor):
+                        loader_batched[k] = tuple(el[self._loader_batch_index].unsqueeze(0) for el in element)
+                    elif isinstance(element[0], np.ndarray):
+                        loader_batched[k] = tuple(np.expand_dims(el[self._loader_batch_index], 0) for el in element)
+                    continue
+                if element is None:
+                    # This can happen for optional data that get passed around
+                    loader_batched[k] = None
+                elif isinstance(element[self._loader_batch_index], torch.Tensor):
+                    # Take correct batch data, but make it looked like batch_size=1
+                    # For compatibility with other methods within transformers
 
-        # We're out of items within a batch
-        item = next(self.iterator)
-        processed = self.infer(item, **self.params)
-        # We now have a batch of "inferred things".
-        if self.loader_batch_size is not None:
-            # Try to infer the size of the batch
-            if isinstance(processed, torch.Tensor):
-                first_tensor = processed
-            elif isinstance(processed, tuple):
-                first_tensor = processed[0]
-            else:
-                key = list(processed.keys())[0]
-                first_tensor = processed[key]
-
-            if isinstance(first_tensor, list):
-                observed_batch_size = len(first_tensor)
-            else:
-                observed_batch_size = first_tensor.shape[0]
-            if 0 < observed_batch_size < self.loader_batch_size:
-                # could be last batch so we can't unroll as many
-                # elements.
-                self.loader_batch_size = observed_batch_size
-            # Setting internal index to unwrap the batch
-            self._loader_batch_data = processed[0] if isinstance(processed, tuple) else processed
-            self._loader_batch_index = 0
-            return self.loader_batch_item()
-        else:
-            # We're not unrolling batches
-            return processed
+                    loader_batched[k] = element[self._loader_batch_index].unsqueeze(0)
+                elif isinstance(element[self._loader_batch_index], np.ndarray):
+                    # Take correct batch data, but make it looked like batch_size=1
+                    # For compatibility with other methods within transformers
+                    loader_batched[k] = np.expand_dims(element[self._loader_batch_index], 0)
+                elif isinstance(element[self._loader_batch_index], ctranslate2.StorageView):
+                    loader_batched[k] = element
+                else:
+                    # This is typically a list, so no need to `unsqueeze`.
+                    loader_batched[k] = element[self._loader_batch_index]
+            # Recreate the element by reusing the original class to make it look
+            # batch_size=1
+            result = self._loader_batch_data.__class__(loader_batched)
+        self._loader_batch_index += 1
+        return result
 
 
 def find_numeral_symbol_tokens(tokenizer):
