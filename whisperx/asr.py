@@ -17,6 +17,46 @@ from whisperx.types import SingleSegment, TranscriptionResult
 from whisperx.vads import Vad, Silero, Pyannote
 
 
+class MyPipelineIterator(PipelineIterator):
+    def __next__(self):
+        if self._loader_batch_index is not None and self._loader_batch_index < self.loader_batch_size:
+            # We are currently unrolling a batch so we just need to return
+            # the current item within a batch
+            return self.loader_batch_item()
+
+        # We're out of items within a batch
+        item = next(self.iterator)
+        processed = self.infer(item, **self.params)
+        # We now have a batch of "inferred things".
+        if self.loader_batch_size is not None:
+            # Try to infer the size of the batch
+            print("in_my_pipeline_iterator", processed)
+            print(type(processed))
+            if isinstance(processed, torch.Tensor):
+                first_tensor = processed
+            elif isinstance(processed, tuple):
+                first_tensor = processed[0]
+            else:
+                key = list(processed.keys())[0]
+                first_tensor = processed[key]
+
+            if isinstance(first_tensor, list):
+                observed_batch_size = len(first_tensor)
+            else:
+                observed_batch_size = first_tensor.shape[0]
+            if 0 < observed_batch_size < self.loader_batch_size:
+                # could be last batch so we can't unroll as many
+                # elements.
+                self.loader_batch_size = observed_batch_size
+            # Setting internal index to unwrap the batch
+            self._loader_batch_data = processed[0] if isinstance(processed, tuple) else processed
+            self._loader_batch_index = 0
+            return self.loader_batch_item()
+        else:
+            # We're not unrolling batches
+            return processed
+
+
 def find_numeral_symbol_tokens(tokenizer):
     numeral_symbol_tokens = []
     for i in range(tokenizer.eot):
@@ -173,23 +213,6 @@ class FasterWhisperPipeline(Pipeline):
             'encoder_output': encoder_output,
             'num_frames': num_frames
         }
-
-    def forward(self, model_inputs, **forward_params):
-        with self.device_placement():
-            if self.framework == "tf":
-                model_inputs["training"] = False
-                model_outputs = self._forward(model_inputs, **forward_params)
-            elif self.framework == "pt":
-                inference_context = self.get_inference_context()
-                with inference_context():
-                    model_inputs = self._ensure_tensor_on_device(model_inputs, device=self.device)
-                    model_outputs = self._forward(model_inputs, **forward_params)
-                    print("in_forward",model_outputs)
-                    model_outputs = self._ensure_tensor_on_device(model_outputs, device=torch.device("cpu"))
-                    print("in_forward_cpu", model_outputs)
-            else:
-                raise ValueError(f"Framework {self.framework} is not supported")
-        return model_outputs
 
     def postprocess(self, model_outputs):
         print("in_postprocess", model_outputs)
