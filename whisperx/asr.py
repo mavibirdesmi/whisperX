@@ -333,7 +333,7 @@ class FasterWhisperPipeline(Pipeline):
                 print(f"Progress: {percent_complete:.2f}%...")
 
             print(self.options.word_timestamps)
-            if False and self.options.word_timestamps:
+            if self.options.word_timestamps:
                 segments_as_dict = {
                     "start": vad_segments[idx]['start'],
                     "end": vad_segments[idx]['end'],
@@ -350,6 +350,7 @@ class FasterWhisperPipeline(Pipeline):
                     self.options.append_punctuations,
                     last_speech_timestamp=0.0,
                 )
+                print("in_transcribe", segments_as_dict)
             
             text = out['text']
             if batch_size in [0, 1, None]:
