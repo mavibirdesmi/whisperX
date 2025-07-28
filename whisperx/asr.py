@@ -235,8 +235,8 @@ class FasterWhisperPipeline(Pipeline):
         def stack(items):
             return {'inputs': torch.stack([x['inputs'] for x in items])}
         dataloader = torch.utils.data.DataLoader(dataset, num_workers=num_workers, batch_size=batch_size, collate_fn=stack)
-        model_iterator = PipelineIterator(dataloader, self.forward, forward_params, loader_batch_size=batch_size)
-        final_iterator = PipelineIterator(model_iterator, self.postprocess, postprocess_params)
+        model_iterator = MyPipelineIterator(dataloader, self.forward, forward_params, loader_batch_size=batch_size)
+        final_iterator = MyPipelineIterator(model_iterator, self.postprocess, postprocess_params)
         return final_iterator
 
     def transcribe(
