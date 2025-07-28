@@ -23,6 +23,7 @@ class MyPipelineIterator(PipelineIterator):
         """
         Return item located at `loader_batch_index` within the current `loader_batch_data`.
         """
+        print("in_loader_batch", self._loader_batch_data, type(self._loader_batch_data))
         if isinstance(self._loader_batch_data, torch.Tensor):
             # Batch data is simple tensor, just fetch the slice
             result = self._loader_batch_data[self._loader_batch_index].unsqueeze(0)
@@ -30,6 +31,7 @@ class MyPipelineIterator(PipelineIterator):
             # Batch data is assumed to be BaseModelOutput (or dict)
             loader_batched = {}
             for k, element in self._loader_batch_data.items():
+                print("in_loader_batch_item", k, element, type(element))
                 if isinstance(element, ModelOutput):
                     # Convert ModelOutput to tuple first
                     element = element.to_tuple()
