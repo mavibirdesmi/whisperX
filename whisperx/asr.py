@@ -184,14 +184,15 @@ class FasterWhisperPipeline(Pipeline):
                 with inference_context():
                     model_inputs = self._ensure_tensor_on_device(model_inputs, device=self.device)
                     model_outputs = self._forward(model_inputs, **forward_params)
-                    print(model_outputs)
+                    print("in_forward",model_outputs)
                     model_outputs = self._ensure_tensor_on_device(model_outputs, device=torch.device("cpu"))
-                    print(model_outputs)
+                    print("in_forward_cpu", model_outputs)
             else:
                 raise ValueError(f"Framework {self.framework} is not supported")
         return model_outputs
 
     def postprocess(self, model_outputs):
+        print("in_postprocess", model_outputs)
         return model_outputs
 
     def get_iterator(
