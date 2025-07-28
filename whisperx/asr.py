@@ -338,7 +338,7 @@ class FasterWhisperPipeline(Pipeline):
                 segments_as_dict = {
                     "start": vad_segments[idx]['start'],
                     "end": vad_segments[idx]['end'],
-                    "tokens": out['token_ids'][idx],
+                    "tokens": out['token_ids'],
                     "seek": 0.0
                 }
                         
