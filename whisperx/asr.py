@@ -10,6 +10,7 @@ from faster_whisper.tokenizer import Tokenizer
 from faster_whisper.transcribe import TranscriptionOptions, get_ctranslate2_storage
 from faster_whisper.utils import get_end
 from transformers import Pipeline
+from transformers.utils.generic import ModelOutput
 from transformers.pipelines.pt_utils import PipelineIterator
 
 from whisperx.audio import N_SAMPLES, SAMPLE_RATE, load_audio, log_mel_spectrogram
@@ -18,6 +19,18 @@ from whisperx.vads import Vad, Silero, Pyannote
 
 
 class MyPipelineIterator(PipelineIterator):
+    def loader_batch_item(self):
+        """
+        Return item located at `loader_batch_index` within the current `loader_batch_data`.
+        """
+        print("in_loader_batch_item", self._loader_batch_data, self._loader_batch_index, type(self._loader_batch_data))
+        if isinstance(self._loader_batch_data, ctranslate2.StorageView):
+            result = self._loader_batch_data
+            self._loader_batch_index += 1
+            return result
+        else:
+            return super().loader_batch_item()
+    
     def __next__(self):
         if self._loader_batch_index is not None and self._loader_batch_index < self.loader_batch_size:
             # We are currently unrolling a batch so we just need to return
@@ -30,8 +43,6 @@ class MyPipelineIterator(PipelineIterator):
         # We now have a batch of "inferred things".
         if self.loader_batch_size is not None:
             # Try to infer the size of the batch
-            print("in_my_pipeline_iterator", processed)
-            print(type(processed))
             if isinstance(processed, torch.Tensor):
                 first_tensor = processed
             elif isinstance(processed, tuple):
