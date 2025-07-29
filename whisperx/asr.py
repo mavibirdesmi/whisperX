@@ -23,7 +23,6 @@ class MyPipelineIterator(PipelineIterator):
         """
         Return item located at `loader_batch_index` within the current `loader_batch_data`.
         """
-        print("in_loader_batch", self._loader_batch_data, type(self._loader_batch_data))
         if isinstance(self._loader_batch_data, torch.Tensor):
             # Batch data is simple tensor, just fetch the slice
             result = self._loader_batch_data[self._loader_batch_index].unsqueeze(0)
@@ -31,7 +30,6 @@ class MyPipelineIterator(PipelineIterator):
             # Batch data is assumed to be BaseModelOutput (or dict)
             loader_batched = {}
             for k, element in self._loader_batch_data.items():
-                print("in_loader_batch_item", k, element, type(element))
                 if isinstance(element, ModelOutput):
                     # Convert ModelOutput to tuple first
                     element = element.to_tuple()
@@ -125,7 +123,6 @@ class WhisperModel(faster_whisper.WhisperModel):
                 suppress_blank=options.suppress_blank,
                 suppress_tokens=options.suppress_tokens,
             )
-        print(result)
         tokens_batch = [x.sequences_ids[0] for x in result]
 
         def decode_batch(tokens: List[List[int]]) -> list[str]:
@@ -138,7 +135,6 @@ class WhisperModel(faster_whisper.WhisperModel):
         texts = decode_batch(tokens_batch)
         
         if options.word_timestamps:
-            print(features.shape, encoder_output.shape)
             num_frames = features.shape[-1] - 1
             return texts, tokens_batch, encoder_output, num_frames
         return texts, tokens_batch, None, None
@@ -229,7 +225,6 @@ class FasterWhisperPipeline(Pipeline):
         }
 
     def postprocess(self, model_outputs):
-        print("in_postprocess", model_outputs)
         return model_outputs
 
     def get_iterator(
@@ -324,23 +319,25 @@ class FasterWhisperPipeline(Pipeline):
         batch_size = batch_size or self._batch_size
         total_segments = len(vad_segments)
         self.options.word_timestamps = word_timestamps
-        print(vad_segments, type(vad_segments))
+
         for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
-            print(vad_segments[idx:idx+batch_size])
             if print_progress:
                 base_progress = ((idx + 1) / total_segments) * 100
                 percent_complete = base_progress / 2 if combined_progress else base_progress
                 print(f"Progress: {percent_complete:.2f}%...")
 
-            print(self.options.word_timestamps)
             if self.options.word_timestamps:
-                segments_as_dict = {
-                    "start": vad_segments[idx]['start'],
-                    "end": vad_segments[idx]['end'],
-                    "tokens": out['token_ids'],
-                    "seek": 0.0
-                }
-                print("in_transcribe_word_timestamps", segments_as_dict)
+                segments_as_dict = [
+                    [
+                        {
+                            "start": vad_segments[idx_s]['start'],
+                            "end": vad_segments[idx_s]['end'],
+                            "tokens": out['token_ids'],
+                            "seek": vad_segments[min(0, batch_size*(idx_s-1))]['start']
+                        }
+                    ]
+                    for idx_s in range(len(vad_segments[idx:idx+batch_size]))
+                ]
                         
                 self.model.add_word_timestamps(
                     segments_as_dict, # need start, end, tokens, seek
@@ -358,13 +355,27 @@ class FasterWhisperPipeline(Pipeline):
                 text = text[0]
             if verbose:
                 print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
-            segments.append(
-                {
-                    "text": text,
-                    "start": round(vad_segments[idx]['start'], 3),
-                    "end": round(vad_segments[idx]['end'], 3)
-                }
-            )
+
+            if self.options.word_timestamps:
+                for segment in segments_as_dict:
+                    # start, end, tokens, seek, words
+                    for subsegment in segment:
+                        for subsegment_transcribe in subsegment["words"]:
+                            segments.append(
+                                {
+                                    "text": subsegment_transcribe["word"],
+                                    "start": round(subsegment['seek'] + subsegment_transcribe['start'], 3),
+                                    "end": round(subsegment['seek'] + subsegment_transcribe['end'], 3)
+                                }
+                            )
+            else:
+                segments.append(
+                    {
+                        "text": text,
+                        "start": round(vad_segments[idx]['start'], 3),
+                        "end": round(vad_segments[idx]['end'], 3)
+                    }
+                )
 
         # revert the tokenizer if multilingual inference is enabled
         if self.preset_language is None:
