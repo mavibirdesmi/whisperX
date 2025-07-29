@@ -350,7 +350,6 @@ class FasterWhisperPipeline(Pipeline):
                     self.options.append_punctuations,
                     last_speech_timestamp=0.0,
                 )
-                print("in_transcribe", segments_as_dict)
             
             text = out['text']
             if batch_size in [0, 1, None]:
