@@ -354,7 +354,7 @@ class FasterWhisperPipeline(Pipeline):
             text = out['text']
             if batch_size in [0, 1, None]:
                 text = text[0]
-            elif not self.options.without_timestamps:
+            elif not self.options.word_timestamps:
                 text = " ".join(text)
             if verbose:
                 print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
