@@ -244,7 +244,7 @@ class FasterWhisperPipeline(Pipeline):
         def stack(items):
             return {'inputs': torch.stack([x['inputs'] for x in items])}
         dataloader = torch.utils.data.DataLoader(dataset, num_workers=num_workers, batch_size=batch_size, collate_fn=stack)
-        model_iterator = MyPipelineIterator(dataloader, self.forward, forward_params, loader_batch_size=batch_size)
+        model_iterator = MyPipelineIterator(dataloader, self.forward, forward_params)
         final_iterator = MyPipelineIterator(model_iterator, self.postprocess, postprocess_params)
         return final_iterator
 
@@ -332,15 +332,15 @@ class FasterWhisperPipeline(Pipeline):
                 segments_as_dict = [
                     [
                         {
-                            "start": vad_segments[idx_s]['start'],
-                            "end": vad_segments[idx_s]['end'],
-                            "tokens": out['token_ids'],
-                            "seek": vad_segments[min(0, batch_size*(idx_s-1))]['start']
+                            "start": vad_segments[idx * batch_size + idx_s]['start'],
+                            "end": vad_segments[idx * batch_size + idx_s]['end'],
+                            "tokens": out['token_ids'][idx_s],
+                            "seek": vad_segments[idx * batch_size + idx_s]['start']
                         }
                     ]
-                    for idx_s in range(len(vad_segments[idx:idx+batch_size]))
+                    for idx_s in range(out["encoder_output"].shape[0])
                 ]
-                        
+
                 self.model.add_word_timestamps(
                     segments_as_dict, # need start, end, tokens, seek
                     self.tokenizer,
