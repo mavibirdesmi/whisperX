@@ -84,6 +84,10 @@ class WhisperModel(faster_whisper.WhisperModel):
     Currently only works in non-timestamp mode and fixed prompt for all samples in batch.
     '''
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_lang_detected = False
+
     def generate_segment_batched(
         self,
         features: np.ndarray,
@@ -97,11 +101,13 @@ class WhisperModel(faster_whisper.WhisperModel):
 
         encoder_output = self.encode(features)
         
-        lang_detection = self.model.detect_language(encoder_output)
-        language_token, _ = lang_detection[0][0] # Get top probability language token
-        language = language_token[2:-2] # Remove <|language|>
-        tokenizer.language_code = language
-        tokenizer.language = tokenizer.tokenizer.token_to_id(language_token)
+        if not self.is_lang_detected:
+            lang_detection = self.model.detect_language(encoder_output)
+            language_token, _ = lang_detection[0][0] # Get top probability language token
+            language = language_token[2:-2] # Remove <|language|>
+            tokenizer.language_code = language
+            tokenizer.language = tokenizer.tokenizer.token_to_id(language_token)
+            self.is_lang_detected = True
 
         if options.initial_prompt is not None:
             initial_prompt = " " + options.initial_prompt.strip()
@@ -386,6 +392,9 @@ class FasterWhisperPipeline(Pipeline):
                         "end": round(vad_segments[min((idx+1)*batch_size - 1, total_segments-1)]['end'], 3)
                     }
                 )
+        
+        # restore
+        self.model.is_lang_detected = False
 
         # revert the tokenizer if multilingual inference is enabled
         if self.preset_language is None:
