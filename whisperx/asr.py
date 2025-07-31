@@ -260,7 +260,7 @@ class FasterWhisperPipeline(Pipeline):
         combined_progress=False,
         verbose=False,
         word_timestamps: bool = False,
-        without_timestamps: bool = False
+        without_timestamps: bool = True
     ) -> TranscriptionResult:
         if isinstance(audio, str):
             audio = load_audio(audio)
