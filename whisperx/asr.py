@@ -94,6 +94,15 @@ class WhisperModel(faster_whisper.WhisperModel):
         batch_size = features.shape[0]
         all_tokens = []
         prompt_reset_since = 0
+
+        encoder_output = self.encode(features)
+        
+        lang_detection = self.model.detect_language(encoder_output)
+        language_token, _ = lang_detection[0][0] # Get top probability language token
+        language = language_token[2:-2] # Remove <|language|>
+        tokenizer.language_code = language
+        tokenizer.language = tokenizer.tokenizer.token_to_id(language_token)
+
         if options.initial_prompt is not None:
             initial_prompt = " " + options.initial_prompt.strip()
             initial_prompt_tokens = tokenizer.encode(initial_prompt)
@@ -106,8 +115,6 @@ class WhisperModel(faster_whisper.WhisperModel):
             prefix=options.prefix,
             hotwords=options.hotwords
         )
-
-        encoder_output = self.encode(features)
 
         max_initial_timestamp_index = int(
             round(options.max_initial_timestamp / self.time_precision)
@@ -289,13 +296,13 @@ class FasterWhisperPipeline(Pipeline):
             offset=self._vad_params["vad_offset"],
         )
         if self.tokenizer is None:
-            language = language or self.detect_language(audio)
+            # language = language or self.detect_language(audio)
             task = task or "transcribe"
             self.tokenizer = Tokenizer(
                 self.model.hf_tokenizer,
                 self.model.model.is_multilingual,
                 task=task,
-                language=language,
+                language="en", # Assign English, later detect it in forward
             )
         else:
             language = language or self.tokenizer.language_code
