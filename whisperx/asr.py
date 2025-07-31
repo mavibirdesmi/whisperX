@@ -352,10 +352,6 @@ class FasterWhisperPipeline(Pipeline):
                 )
             
             text = out['text']
-            if batch_size in [0, 1, None]:
-                text = text[0]
-            elif not self.options.word_timestamps:
-                text = " ".join(text)
             if verbose:
                 print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
 
@@ -372,13 +368,14 @@ class FasterWhisperPipeline(Pipeline):
                                 }
                             )
             else:
-                segments.append(
-                    {
-                        "text": text,
-                        "start": round(vad_segments[idx*batch_size]['start'], 3),
-                        "end": round(vad_segments[min((idx+1)*batch_size - 1, total_segments-1)]['end'], 3)
-                    }
-                )
+                for idx_s, segment_text in enumerate(text):
+                    segments.append(
+                        {
+                            "text": segment_text,
+                            "start": round(vad_segments[idx * batch_size + idx_s]['start'], 3),
+                            "end": round(vad_segments[idx * batch_size + idx_s]['end'], 3)
+                        }
+                    )
 
         # revert the tokenizer if multilingual inference is enabled
         if self.preset_language is None:
