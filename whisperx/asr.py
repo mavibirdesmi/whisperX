@@ -8,12 +8,65 @@ import numpy as np
 import torch
 from faster_whisper.tokenizer import Tokenizer
 from faster_whisper.transcribe import TranscriptionOptions, get_ctranslate2_storage
+from faster_whisper.utils import get_end
 from transformers import Pipeline
+from transformers.utils.generic import ModelOutput
 from transformers.pipelines.pt_utils import PipelineIterator
 
 from whisperx.audio import N_SAMPLES, SAMPLE_RATE, load_audio, log_mel_spectrogram
 from whisperx.types import SingleSegment, TranscriptionResult
 from whisperx.vads import Vad, Silero, Pyannote
+
+
+class MyPipelineIterator(PipelineIterator):
+    def loader_batch_item(self):
+        """
+        Return item located at `loader_batch_index` within the current `loader_batch_data`.
+        """
+        if isinstance(self._loader_batch_data, torch.Tensor):
+            # Batch data is simple tensor, just fetch the slice
+            result = self._loader_batch_data[self._loader_batch_index].unsqueeze(0)
+        else:
+            # Batch data is assumed to be BaseModelOutput (or dict)
+            loader_batched = {}
+            for k, element in self._loader_batch_data.items():
+                if isinstance(element, ModelOutput):
+                    # Convert ModelOutput to tuple first
+                    element = element.to_tuple()
+                    if isinstance(element[0], torch.Tensor):
+                        loader_batched[k] = tuple(el[self._loader_batch_index].unsqueeze(0) for el in element)
+                    elif isinstance(element[0], np.ndarray):
+                        loader_batched[k] = tuple(np.expand_dims(el[self._loader_batch_index], 0) for el in element)
+                    continue
+                if k in {"hidden_states", "past_key_values", "attentions"} and isinstance(element, tuple):
+                    # Those are stored as lists of tensors so need specific unbatching.
+                    if isinstance(element[0], torch.Tensor):
+                        loader_batched[k] = tuple(el[self._loader_batch_index].unsqueeze(0) for el in element)
+                    elif isinstance(element[0], np.ndarray):
+                        loader_batched[k] = tuple(np.expand_dims(el[self._loader_batch_index], 0) for el in element)
+                    continue
+                if element is None:
+                    # This can happen for optional data that get passed around
+                    loader_batched[k] = None
+                elif isinstance(element, (ctranslate2.StorageView, int)):
+                    loader_batched[k] = element
+                elif isinstance(element[self._loader_batch_index], torch.Tensor):
+                    # Take correct batch data, but make it looked like batch_size=1
+                    # For compatibility with other methods within transformers
+
+                    loader_batched[k] = element[self._loader_batch_index].unsqueeze(0)
+                elif isinstance(element[self._loader_batch_index], np.ndarray):
+                    # Take correct batch data, but make it looked like batch_size=1
+                    # For compatibility with other methods within transformers
+                    loader_batched[k] = np.expand_dims(element[self._loader_batch_index], 0)
+                else:
+                    # This is typically a list, so no need to `unsqueeze`.
+                    loader_batched[k] = element[self._loader_batch_index]
+            # Recreate the element by reusing the original class to make it look
+            # batch_size=1
+            result = self._loader_batch_data.__class__(loader_batched)
+        self._loader_batch_index += 1
+        return result
 
 
 def find_numeral_symbol_tokens(tokenizer):
@@ -70,19 +123,21 @@ class WhisperModel(faster_whisper.WhisperModel):
                 suppress_blank=options.suppress_blank,
                 suppress_tokens=options.suppress_tokens,
             )
-
         tokens_batch = [x.sequences_ids[0] for x in result]
 
-        def decode_batch(tokens: List[List[int]]) -> str:
+        def decode_batch(tokens: List[List[int]]) -> list[str]:
             res = []
             for tk in tokens:
                 res.append([token for token in tk if token < tokenizer.eot])
             # text_tokens = [token for token in tokens if token < self.eot]
             return tokenizer.tokenizer.decode_batch(res)
 
-        text = decode_batch(tokens_batch)
-
-        return text
+        texts = decode_batch(tokens_batch)
+        
+        if options.word_timestamps:
+            num_frames = features.shape[-1] - 1
+            return texts, tokens_batch, encoder_output, num_frames
+        return texts, tokens_batch, None, None
 
     def encode(self, features: np.ndarray) -> ctranslate2.StorageView:
         # When the model is running on multiple GPUs, the encoder output should be moved
@@ -159,8 +214,15 @@ class FasterWhisperPipeline(Pipeline):
         return {'inputs': features}
 
     def _forward(self, model_inputs):
-        outputs = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
-        return {'text': outputs}
+        out = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
+        encoder_output : ctranslate2.StorageView
+        outputs, token_ids, encoder_output, num_frames = out
+        return {
+            'text': outputs,
+            'token_ids': token_ids,
+            'encoder_output': encoder_output,
+            'num_frames': num_frames
+        }
 
     def postprocess(self, model_outputs):
         return model_outputs
@@ -182,8 +244,8 @@ class FasterWhisperPipeline(Pipeline):
         def stack(items):
             return {'inputs': torch.stack([x['inputs'] for x in items])}
         dataloader = torch.utils.data.DataLoader(dataset, num_workers=num_workers, batch_size=batch_size, collate_fn=stack)
-        model_iterator = PipelineIterator(dataloader, self.forward, forward_params, loader_batch_size=batch_size)
-        final_iterator = PipelineIterator(model_iterator, self.postprocess, postprocess_params)
+        model_iterator = MyPipelineIterator(dataloader, self.forward, forward_params)
+        final_iterator = MyPipelineIterator(model_iterator, self.postprocess, postprocess_params)
         return final_iterator
 
     def transcribe(
@@ -197,6 +259,8 @@ class FasterWhisperPipeline(Pipeline):
         print_progress=False,
         combined_progress=False,
         verbose=False,
+        word_timestamps: bool = False,
+        without_timestamps: bool = True
     ) -> TranscriptionResult:
         if isinstance(audio, str):
             audio = load_audio(audio)
@@ -255,23 +319,63 @@ class FasterWhisperPipeline(Pipeline):
         segments: List[SingleSegment] = []
         batch_size = batch_size or self._batch_size
         total_segments = len(vad_segments)
+        self.options.word_timestamps = word_timestamps
+        self.options.without_timestamps = without_timestamps
+
         for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
             if print_progress:
                 base_progress = ((idx + 1) / total_segments) * 100
                 percent_complete = base_progress / 2 if combined_progress else base_progress
                 print(f"Progress: {percent_complete:.2f}%...")
+
+            if self.options.word_timestamps:
+                segments_as_dict = [
+                    [
+                        {
+                            "start": vad_segments[idx * batch_size + idx_s]['start'],
+                            "end": vad_segments[idx * batch_size + idx_s]['end'],
+                            "tokens": out['token_ids'][idx_s],
+                            "seek": vad_segments[idx * batch_size + idx_s]['start']
+                        }
+                    ]
+                    for idx_s in range(out["encoder_output"].shape[0])
+                ]
+
+                self.model.add_word_timestamps(
+                    segments_as_dict, # need start, end, tokens, seek
+                    self.tokenizer,
+                    out['encoder_output'],
+                    out['num_frames'],
+                    self.options.prepend_punctuations,
+                    self.options.append_punctuations,
+                    last_speech_timestamp=0.0,
+                )
+            
             text = out['text']
-            if batch_size in [0, 1, None]:
-                text = text[0]
             if verbose:
                 print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
-            segments.append(
-                {
-                    "text": text,
-                    "start": round(vad_segments[idx]['start'], 3),
-                    "end": round(vad_segments[idx]['end'], 3)
-                }
-            )
+
+            if self.options.word_timestamps:
+                for segment in segments_as_dict:
+                    # start, end, tokens, seek, words
+                    for subsegment in segment:
+                        for subsegment_transcribe in subsegment["words"]:
+                            segments.append(
+                                {
+                                    "text": subsegment_transcribe["word"],
+                                    "start": round(subsegment['seek'] + subsegment_transcribe['start'], 3),
+                                    "end": round(subsegment['seek'] + subsegment_transcribe['end'], 3)
+                                }
+                            )
+            else:
+                for idx_s, segment_text in enumerate(text):
+                    segments.append(
+                        {
+                            "text": segment_text,
+                            "start": round(vad_segments[idx * batch_size + idx_s]['start'], 3),
+                            "end": round(vad_segments[idx * batch_size + idx_s]['end'], 3)
+                        }
+                    )
 
         # revert the tokenizer if multilingual inference is enabled
         if self.preset_language is None:
